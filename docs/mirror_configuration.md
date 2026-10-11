@@ -437,7 +437,7 @@ Remove packages that no longer exist on PyPI from the `todo` list.
 
 An interrupted sync resumes from `todo` and does not read the changelog until that list is finished. A package deleted upstream raises `PackageNotFound` and, by default, stays in `todo`. If another package also fails (for example a stale serial), the sync is not marked successful, `todo` is kept, and later runs stay on that list.
 
-Set `cleanup_todo = true`, or pass `bandersnatch mirror --cleanup-todo`, to drop only those `PackageNotFound` names from `todo`. The default `false` keeps the current behavior. Stale serials and other errors stay on the list. This option does not delete release files, local blobs, or simple API pages already stored in the mirror.
+Set `cleanup_todo = true`, or pass `bandersnatch mirror --cleanup-todo`, to drop only those `PackageNotFound` names from `todo`. The default `false` keeps the current behavior. Stale serials and other errors stay on the list. This option does not delete release files, local blobs, or simple API pages already stored in the mirror. If rewriting `todo` fails, the sync is marked unsuccessful and the mirror continues with the remaining packages.
 
 ### `compare-method`
 

@@ -2066,5 +2066,143 @@ async def test_cleanup_todo_ignores_name_missing_from_packages(
     assert mirror.todolist.read_text(encoding="utf-8") == original
 
 
+@pytest.mark.asyncio
+async def test_cleanup_todo_write_failure_does_not_abort_mirror(
+    mirror: BandersnatchMirror,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A failed todo rewrite is a package error, and later packages still run."""
+    import logging
+
+    from bandersnatch.errors import PackageNotFound, StaleMetadata
+
+    seen: list[str] = []
+
+    async def update_metadata(self: Package, master: Master, attempts: int = 3) -> None:
+        seen.append(self.raw_name)
+        if self.raw_name == _MISSING_PACKAGE:
+            raise PackageNotFound(self.name)
+        if self.raw_name == _STALE_PACKAGE:
+            raise StaleMetadata(self.name, attempts)
+        raise AssertionError(self.raw_name)
+
+    def fail_missing_rewrite(name: str) -> None:
+        if name == _MISSING_PACKAGE:
+            raise OSError(13, "Permission denied")
+        raise AssertionError(name)
+
+    monkeypatch.setattr(Package, "update_metadata", update_metadata)
+    monkeypatch.setattr(mirror, "record_finished_package", fail_missing_rewrite)
+    caplog.set_level(logging.ERROR, logger="bandersnatch.mirror")
+    packages = {_MISSING_PACKAGE: _MISSING_SERIAL, _STALE_PACKAGE: _STALE_SERIAL}
+    original = _prepare_todo(mirror, packages, cleanup_todo=True, need_wrapup=True)
+    files = _plant_mirror_files(mirror, _MISSING_PACKAGE)
+    files.update(_plant_mirror_files(mirror, _STALE_PACKAGE))
+    serial_before = mirror.synced_serial
+
+    await mirror.sync_packages()
+
+    assert seen == [_MISSING_PACKAGE, _STALE_PACKAGE]
+    assert mirror.errors
+    assert mirror.packages_to_sync == packages
+    assert mirror.todolist.read_text(encoding="utf-8") == original
+    assert (
+        f"Error syncing package: {Package(_MISSING_PACKAGE).name}@{_MISSING_SERIAL}"
+        in caplog.text
+    )
+    _assert_mirror_files_unchanged(files)
+
+    mirror.finalize_sync()
+
+    assert mirror.synced_serial == serial_before
+    assert mirror.todolist.exists()
+    assert mirror.todolist.read_text(encoding="utf-8") == original
+    _assert_mirror_files_unchanged(files)
+
+
+@pytest.mark.asyncio
+async def test_cleanup_disabled_does_not_rewrite_when_record_would_fail(
+    mirror: BandersnatchMirror, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Default off never calls the todo rewrite, so a failing hook is unused."""
+
+    def fail_any_rewrite(name: str) -> None:
+        raise OSError(13, "Permission denied")
+
+    _install_metadata_results(monkeypatch)
+    monkeypatch.setattr(mirror, "record_finished_package", fail_any_rewrite)
+    packages = {_MISSING_PACKAGE: _MISSING_SERIAL}
+    original = _prepare_todo(mirror, packages, cleanup_todo=False, need_wrapup=True)
+    files = _plant_mirror_files(mirror, _MISSING_PACKAGE)
+    serial_before = mirror.synced_serial
+
+    await mirror.sync_packages()
+
+    assert mirror.todolist.read_text(encoding="utf-8") == original
+    mirror.finalize_sync()
+
+    assert not mirror.errors
+    assert mirror.packages_to_sync == packages
+    assert mirror.synced_serial == _TODO_SERIAL
+    assert serial_before != _TODO_SERIAL
+    assert not mirror.todolist.exists()
+    _assert_mirror_files_unchanged(files)
+
+
+@pytest.mark.asyncio
+async def test_cleanup_todo_storage_oserror_keeps_disk_todo(
+    mirror: BandersnatchMirror, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The real rewrite raises after dropping the name in memory.
+
+    The worker still finishes the queue. The sync stays unsuccessful, and the
+    todo file on disk is left unchanged.
+    """
+    from bandersnatch.errors import PackageNotFound, StaleMetadata
+
+    seen: list[str] = []
+
+    async def update_metadata(self: Package, master: Master, attempts: int = 3) -> None:
+        seen.append(self.raw_name)
+        if self.raw_name == _MISSING_PACKAGE:
+            raise PackageNotFound(self.name)
+        if self.raw_name == _STALE_PACKAGE:
+            raise StaleMetadata(self.name, attempts)
+        raise AssertionError(self.raw_name)
+
+    from contextlib import AbstractContextManager
+    from typing import IO
+
+    backend = mirror.storage_backend
+    real_update_safe = backend.update_safe
+
+    def fail_todo_rewrite(
+        filename: str | Path, **kw: Any
+    ) -> AbstractContextManager[IO[Any]]:
+        if Path(filename).name == "todo":
+            raise OSError(13, "Permission denied")
+        return real_update_safe(filename, **kw)
+
+    monkeypatch.setattr(Package, "update_metadata", update_metadata)
+    monkeypatch.setattr(backend, "update_safe", fail_todo_rewrite)
+    packages = {_MISSING_PACKAGE: _MISSING_SERIAL, _STALE_PACKAGE: _STALE_SERIAL}
+    original = _prepare_todo(mirror, packages, cleanup_todo=True, need_wrapup=True)
+    files = _plant_mirror_files(mirror, _MISSING_PACKAGE)
+    files.update(_plant_mirror_files(mirror, _STALE_PACKAGE))
+    serial_before = mirror.synced_serial
+
+    await mirror.sync_packages()
+    mirror.finalize_sync()
+
+    assert seen == [_MISSING_PACKAGE, _STALE_PACKAGE]
+    assert mirror.errors
+    assert _MISSING_PACKAGE not in mirror.packages_to_sync
+    assert mirror.packages_to_sync == {_STALE_PACKAGE: _STALE_SERIAL}
+    assert mirror.synced_serial == serial_before
+    assert mirror.todolist.read_text(encoding="utf-8") == original
+    _assert_mirror_files_unchanged(files)
+
+
 if __name__ == "__main__":
     pytest.main(sys.argv)

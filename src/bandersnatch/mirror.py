@@ -145,7 +145,13 @@ class Mirror:
                 logger.debug(f"Package syncer {idx} emptied queue")
                 break
             except PackageNotFound:
-                await self.on_package_not_found(package)
+                # This handler is outside the sibling `except Exception` below.
+                # A todo rewrite failure must use on_error so one package does
+                # not escape asyncio.gather and abort the rest of the mirror.
+                try:
+                    await self.on_package_not_found(package)
+                except Exception as e:
+                    self.on_error(e, package=package)
                 continue
             except Exception as e:
                 self.on_error(e, package=package)

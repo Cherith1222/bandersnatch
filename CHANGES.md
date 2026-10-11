@@ -2,7 +2,7 @@
 
 ## Bug Fixes
 
-- When `cleanup_todo` is enabled, or `bandersnatch mirror --cleanup-todo` is passed, packages that raise `PackageNotFound` are removed from the todo list. The default stays off. Stale serials stay on the list, and mirrored files are not deleted. `PR #2361`
+- When `cleanup_todo` is enabled, or `bandersnatch mirror --cleanup-todo` is passed, packages that raise `PackageNotFound` are removed from the todo list. The default stays off. Stale serials stay on the list, and mirrored files are not deleted. If rewriting the todo fails, the error is recorded and the mirror continues. `PR #2361`
 
 # 8.1.0
 
